@@ -9,7 +9,7 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#0F1117;color:#F0F2FF;font-family:'Inter',sans-serif;}
@@ -21,43 +21,23 @@ button{transition:opacity 0.15s;}button:hover{opacity:0.85;}
 <body>
 <div id="root"></div>
 <script type="text/babel">
+const { useState, useEffect } = React;
+
 const SUPABASE_URL = "https://ztbbdaciykxgdrnmprgx.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0YmJkYWNpeWt4Z2Rybm1wcmd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0MjQ4MjUsImV4cCI6MjA5ODAwMDgyNX0.Or9nsyU8h43tRlAJQyPLbKqbzpPi0xHYDRlHGdjJHvc";
 const getAnthropicKey = () => localStorage.getItem("anthropic_api_key") || "";
 
-const extractTextFromPDF = async (file) => {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let fullText = "";
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    const pageText = content.items.map(item => item.str).join(" ");
-    fullText += pageText + "\n";
-  }
-  return fullText;
+const EMR_SYSTEMS = ["eCW","athena","ModMed","NextGen","Experity","Epic","Cerner","Meditech","Allscripts","PointClickCare"];
+const C = {
+  bg:"#0F1117", surface:"#1A1D27", surfaceHover:"#21253A", border:"#2A2D3E",
+  accent:"#4F7CFF", accentSoft:"rgba(79,124,255,0.12)",
+  success:"#22C55E", warning:"#F59E0B", danger:"#EF4444",
+  textPrimary:"#F0F2FF", textSecondary:"#8B90A8", textMuted:"#555870",
+  emrSoft:"rgba(124,58,237,0.12)", itSoft:"rgba(8,145,178,0.12)"
 };
 
-const extractTextFromDOCX = async (file) => {
-  const arrayBuffer = await file.arrayBuffer();
-  const result = await mammoth.extractRawText({ arrayBuffer });
-  return result.value;
-};
-
-const extractText = async (file) => {
-  if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
-    return await extractTextFromPDF(file);
-  } else if (file.name.endsWith(".docx") || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-    return await extractTextFromDOCX(file);
-  } else {
-    return await file.text();
-  }
-};
-
-const { useState, useEffect } = React;
-
-const supabaseHeaders = (token) => ({
+// ── Supabase helpers ──────────────────────────────────────
+const sbHeaders = (token) => ({
   "Content-Type": "application/json",
   "apikey": SUPABASE_ANON_KEY,
   "Authorization": `Bearer ${token || SUPABASE_ANON_KEY}`,
@@ -71,14 +51,13 @@ const signInWithGoogle = () => {
 const getSession = async () => {
   const hash = window.location.hash;
   if (hash) {
-    const params = new URLSearchParams(hash.substring(1));
-    const accessToken = params.get("access_token");
-    const refreshToken = params.get("refresh_token");
-    if (accessToken) {
-      localStorage.setItem("sb_access_token", accessToken);
-      if (refreshToken) localStorage.setItem("sb_refresh_token", refreshToken);
+    const p = new URLSearchParams(hash.substring(1));
+    const at = p.get("access_token"), rt = p.get("refresh_token");
+    if (at) {
+      localStorage.setItem("sb_access_token", at);
+      if (rt) localStorage.setItem("sb_refresh_token", rt);
       window.history.replaceState({}, document.title, window.location.pathname);
-      return accessToken;
+      return at;
     }
   }
   return localStorage.getItem("sb_access_token");
@@ -91,25 +70,59 @@ const signOut = () => {
 };
 
 const dbFetch = async (path, token, options = {}) => {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: supabaseHeaders(token), ...options
-  });
-  if (!res.ok) { const err = await res.text(); throw new Error(err); }
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: sbHeaders(token), ...options });
+  if (!res.ok) { const e = await res.text(); throw new Error(e); }
+  const t = await res.text();
+  return t ? JSON.parse(t) : null;
 };
 
+const getUserId = async (token) => {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: sbHeaders(token) });
+  const data = await res.json();
+  return data.id;
+};
+
+// ── File text extraction ──────────────────────────────────
+const extractText = async (file) => {
+  if (file.name.endsWith(".pdf") || file.type === "application/pdf") {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const ab = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+    let text = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(x => x.str).join(" ") + "\n";
+    }
+    return text;
+  } else if (file.name.endsWith(".docx")) {
+    const ab = await file.arrayBuffer();
+    const result = await mammoth.extractRawText({ arrayBuffer: ab });
+    return result.value;
+  } else {
+    return await file.text();
+  }
+};
+
+// ── AI resume parser ──────────────────────────────────────
 const parseResumeWithAI = async (text) => {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": getAnthropicKey(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": getAnthropicKey(),
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6", max_tokens: 1000,
-      messages: [{ role: "user", content: `Parse this resume and return ONLY a valid JSON object with no markdown, no backticks, no extra text. Use exactly these fields:
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      messages: [{ role: "user", content: `Parse this resume and return ONLY a valid JSON object, no markdown, no backticks:
 {"first_name":"","last_name":"","email":"","phone":"","location":"","linkedin_url":"","candidate_type":"emr","emr_systems":[],"skills":"","current_title":"","current_company":"","years_experience":0,"target_roles":"","travel_willing":false,"notes":""}
-For candidate_type: use "emr" if they have EMR/EHR trainer or consultant experience, otherwise "it_leadership".
-For emr_systems: only include from: eCW, athena, ModMed, NextGen, Experity, Epic, Cerner, Meditech, Allscripts, PointClickCare
-For skills: comma separated string. For notes: 1-2 sentence summary.
+candidate_type: "emr" if EMR/EHR trainer or consultant, else "it_leadership"
+emr_systems: only from: eCW,athena,ModMed,NextGen,Experity,Epic,Cerner,Meditech,Allscripts,PointClickCare
+skills: comma-separated string
+notes: 1-2 sentence summary
 Resume:
 ${text.substring(0, 3000)}` }]
     })
@@ -119,6 +132,7 @@ ${text.substring(0, 3000)}` }]
   return JSON.parse(clean);
 };
 
+// ── ICP scorer ────────────────────────────────────────────
 const scoreCandidate = (candidate, icp) => {
   if (!icp) return null;
   let score = 0, max = 0;
@@ -139,47 +153,58 @@ const scoreCandidate = (candidate, icp) => {
   return max > 0 ? Math.round((score / max) * 100) : null;
 };
 
-const EMR_SYSTEMS = ["eCW","athena","ModMed","NextGen","Experity","Epic","Cerner","Meditech","Allscripts","PointClickCare"];
-const C = {bg:"#0F1117",surface:"#1A1D27",surfaceHover:"#21253A",border:"#2A2D3E",accent:"#4F7CFF",accentSoft:"rgba(79,124,255,0.12)",success:"#22C55E",warning:"#F59E0B",danger:"#EF4444",textPrimary:"#F0F2FF",textSecondary:"#8B90A8",textMuted:"#555870",emrSoft:"rgba(124,58,237,0.12)",itSoft:"rgba(8,145,178,0.12)"};
-
+// ── UI components ─────────────────────────────────────────
 const Badge = ({ children, color="accent", size="sm" }) => {
-  const m = {accent:{bg:C.accentSoft,text:C.accent},emr:{bg:C.emrSoft,text:"#A78BFA"},it:{bg:C.itSoft,text:"#22D3EE"},success:{bg:"rgba(34,197,94,0.12)",text:C.success},warning:{bg:"rgba(245,158,11,0.12)",text:C.warning},danger:{bg:"rgba(239,68,68,0.12)",text:C.danger},muted:{bg:"rgba(139,144,168,0.12)",text:C.textSecondary}};
-  const c = m[color]||m.accent;
-  return <span style={{background:c.bg,color:c.text,padding:size==="sm"?"2px 8px":"4px 12px",borderRadius:20,fontSize:size==="sm"?11:12,fontWeight:600,letterSpacing:0.3,whiteSpace:"nowrap"}}>{children}</span>;
+  const m = {
+    accent:{bg:C.accentSoft,text:C.accent}, emr:{bg:C.emrSoft,text:"#A78BFA"},
+    it:{bg:C.itSoft,text:"#22D3EE"}, success:{bg:"rgba(34,197,94,0.12)",text:C.success},
+    warning:{bg:"rgba(245,158,11,0.12)",text:C.warning}, danger:{bg:"rgba(239,68,68,0.12)",text:C.danger},
+    muted:{bg:"rgba(139,144,168,0.12)",text:C.textSecondary}
+  };
+  const c = m[color] || m.accent;
+  return <span style={{background:c.bg,color:c.text,padding:size==="sm"?"2px 8px":"4px 12px",borderRadius:20,fontSize:size==="sm"?11:12,fontWeight:600,whiteSpace:"nowrap"}}>{children}</span>;
 };
 
 const Btn = ({ children, onClick, variant="primary", size="md", disabled, style:s={} }) => {
-  const v = {primary:{background:C.accent,color:"#fff",border:"none"},secondary:{background:C.surface,color:C.textPrimary,border:`1px solid ${C.border}`},ghost:{background:"transparent",color:C.textSecondary,border:"none"},danger:{background:"rgba(239,68,68,0.1)",color:C.danger,border:"1px solid rgba(239,68,68,0.3)"}};
+  const v = {
+    primary:{background:C.accent,color:"#fff",border:"none"},
+    secondary:{background:C.surface,color:C.textPrimary,border:`1px solid ${C.border}`},
+    ghost:{background:"transparent",color:C.textSecondary,border:"none"},
+    danger:{background:"rgba(239,68,68,0.1)",color:C.danger,border:"1px solid rgba(239,68,68,0.3)"}
+  };
   const sz = {sm:{padding:"6px 12px",fontSize:12},md:{padding:"8px 16px",fontSize:13},lg:{padding:"12px 24px",fontSize:14}};
   return <button onClick={onClick} disabled={disabled} style={{...v[variant],...sz[size],borderRadius:8,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?0.5:1,...s}}>{children}</button>;
 };
 
 const Field = ({ label, value, onChange, placeholder, type="text", required }) => (
   <div style={{marginBottom:16}}>
-    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:6,letterSpacing:0.5,textTransform:"uppercase"}}>{label}{required&&<span style={{color:C.accent}}> *</span>}</label>}
-    <input type={type} value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}/>
+    {label && <label style={{display:"block",fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:6,letterSpacing:0.5,textTransform:"uppercase"}}>{label}{required && <span style={{color:C.accent}}> *</span>}</label>}
+    <input type={type} value={value||""} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+      style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}/>
   </div>
 );
 
 const Sel = ({ label, value, onChange, options }) => (
   <div style={{marginBottom:16}}>
-    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:6,letterSpacing:0.5,textTransform:"uppercase"}}>{label}</label>}
-    <select value={value||""} onChange={e=>onChange(e.target.value)} style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}>
+    {label && <label style={{display:"block",fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:6,letterSpacing:0.5,textTransform:"uppercase"}}>{label}</label>}
+    <select value={value||""} onChange={e=>onChange(e.target.value)}
+      style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}>
       {options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
   </div>
 );
 
 const ScoreBadge = ({ score }) => {
-  if(score===null||score===undefined) return <Badge color="muted">No ICP</Badge>;
+  if (score === null || score === undefined) return <Badge color="muted">No ICP</Badge>;
   return <Badge color={score>=75?"success":score>=50?"warning":"danger"}>{score}% match</Badge>;
 };
 
+// ── Login ─────────────────────────────────────────────────
 const LoginScreen = () => (
   <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}>
     <div style={{textAlign:"center",maxWidth:400,padding:40}}>
       <div style={{width:64,height:64,background:C.accentSoft,borderRadius:16,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 24px",fontSize:28}}>⚡</div>
-      <h1 style={{fontSize:28,fontWeight:700,marginBottom:8,letterSpacing:-0.5}}>Recruiter CRM</h1>
+      <h1 style={{fontSize:28,fontWeight:700,marginBottom:8}}>Recruiter CRM</h1>
       <p style={{color:C.textSecondary,marginBottom:32,fontSize:14,lineHeight:1.6}}>Your healthcare IT candidate bench, always at your fingertips.</p>
       <button onClick={signInWithGoogle} style={{display:"flex",alignItems:"center",gap:12,background:"#fff",color:"#1F2937",border:"none",borderRadius:10,padding:"14px 24px",fontSize:14,fontWeight:600,cursor:"pointer",margin:"0 auto",width:"100%",justifyContent:"center"}}>
         <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/><path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/><path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/><path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z"/></svg>
@@ -189,47 +214,66 @@ const LoginScreen = () => (
   </div>
 );
 
+// ── Candidate Form ────────────────────────────────────────
 const CandidateForm = ({ candidate, onSave, onCancel }) => {
-  const [form,setForm] = useState(candidate||{candidate_type:"emr",first_name:"",last_name:"",email:"",phone:"",location:"",linkedin_url:"",current_title:"",current_company:"",years_experience:"",emr_systems:[],skills:"",target_roles:"",comp_min:"",comp_max:"",travel_willing:false,available_date:"",active_status:"active",notes:"",last_contacted:""});
-  const [parsing,setParsing] = useState(false);
-  const [parseMsg,setParseMsg] = useState("");
-  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+  const [form, setForm] = useState(candidate || {
+    candidate_type:"emr",first_name:"",last_name:"",email:"",phone:"",location:"",
+    linkedin_url:"",current_title:"",current_company:"",years_experience:"",
+    emr_systems:[],skills:"",target_roles:"",comp_min:"",comp_max:"",
+    travel_willing:false,available_date:"",active_status:"active",notes:"",last_contacted:""
+  });
+  const [parsing, setParsing] = useState(false);
+  const [parseMsg, setParseMsg] = useState("");
+  const set = (k, v) => setForm(f => ({...f, [k]: v}));
+  const toggleEMR = (emr) => {
+    const c = form.emr_systems || [];
+    set("emr_systems", c.includes(emr) ? c.filter(e=>e!==emr) : [...c, emr]);
+  };
 
   const handleResume = async (e) => {
-    const file = e.target.files[0]; if(!file) return;
+    const file = e.target.files[0];
+    if (!file) return;
     setParsing(true); setParseMsg("");
     try {
       const text = await extractText(file);
-      if (!text || text.trim().length < 50) throw new Error("Could not extract text");
+      if (!text || text.trim().length < 50) throw new Error("No text");
       const parsed = await parseResumeWithAI(text);
-      setForm(f=>({...f,...parsed,emr_systems:Array.isArray(parsed.emr_systems)?parsed.emr_systems:[],skills:Array.isArray(parsed.skills)?parsed.skills.join(", "):parsed.skills||""}));
+      setForm(f => ({...f, ...parsed,
+        emr_systems: Array.isArray(parsed.emr_systems) ? parsed.emr_systems : [],
+        skills: Array.isArray(parsed.skills) ? parsed.skills.join(", ") : parsed.skills || ""
+      }));
       setParseMsg("✓ Resume parsed successfully");
-    } catch(err) { setParseMsg("Could not parse resume — please fill in manually"); }
+    } catch(err) {
+      setParseMsg("Could not parse resume — please fill in manually");
+    }
     setParsing(false);
   };
-
-  const toggleEMR = (emr) => { const c=form.emr_systems||[]; set("emr_systems",c.includes(emr)?c.filter(e=>e!==emr):[...c,emr]); };
 
   return (
     <div style={{maxWidth:680,margin:"0 auto"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
-        <h2 style={{fontSize:18,fontWeight:700}}>{candidate?.id?"Edit Candidate":"Add Candidate"}</h2>
+        <h2 style={{fontSize:18,fontWeight:700}}>{candidate?.id ? "Edit Candidate" : "Add Candidate"}</h2>
         <Btn variant="ghost" onClick={onCancel}>✕ Cancel</Btn>
       </div>
+
       <div style={{background:C.accentSoft,border:`1px dashed ${C.accent}`,borderRadius:10,padding:20,marginBottom:24,textAlign:"center"}}>
         <div style={{fontSize:13,color:C.accent,fontWeight:600,marginBottom:6}}>⚡ AI Resume Parser</div>
-        <div style={{fontSize:12,color:C.textSecondary,marginBottom:12}}>Upload a resume (.txt, .pdf) and AI will auto-fill the form</div>
+        <div style={{fontSize:12,color:C.textSecondary,marginBottom:12}}>Upload a resume (.pdf, .docx, .txt) and AI will auto-fill the form</div>
         <label style={{cursor:"pointer",display:"inline-block"}}>
-          <span style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,color:C.textPrimary,cursor:"pointer",display:"inline-block"}}>{parsing?"Parsing resume...":"Upload Resume"}</span>
-          <input type="file" accept=".txt,.pdf,.doc,.docx" onChange={handleResume} style={{display:"none"}} disabled={parsing}/>
+          <span style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:600,color:C.textPrimary,display:"inline-block"}}>
+            {parsing ? "Parsing..." : "Upload Resume"}
+          </span>
+          <input type="file" accept=".pdf,.docx,.txt" onChange={handleResume} style={{display:"none"}} disabled={parsing}/>
         </label>
-        {parseMsg&&<div style={{fontSize:12,marginTop:8,color:parseMsg.startsWith("✓")?C.success:C.danger}}>{parseMsg}</div>}
+        {parseMsg && <div style={{fontSize:12,marginTop:8,color:parseMsg.startsWith("✓")?C.success:C.danger}}>{parseMsg}</div>}
       </div>
+
       <div style={{display:"flex",gap:12,marginBottom:20}}>
         {[{v:"emr",label:"EMR Project",color:"#7C3AED"},{v:"it_leadership",label:"IT / Leadership",color:"#0891B2"}].map(t=>(
           <button key={t.v} onClick={()=>set("candidate_type",t.v)} style={{flex:1,padding:12,borderRadius:10,border:`2px solid ${form.candidate_type===t.v?t.color:C.border}`,background:form.candidate_type===t.v?`${t.color}20`:C.surface,color:form.candidate_type===t.v?t.color:C.textSecondary,fontWeight:600,fontSize:13,cursor:"pointer"}}>{t.label}</button>
         ))}
       </div>
+
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px"}}>
         <Field label="First Name" value={form.first_name} onChange={v=>set("first_name",v)} required/>
         <Field label="Last Name" value={form.last_name} onChange={v=>set("last_name",v)} required/>
@@ -240,9 +284,13 @@ const CandidateForm = ({ candidate, onSave, onCancel }) => {
         <Field label="Current Title" value={form.current_title} onChange={v=>set("current_title",v)}/>
         <Field label="Current Company" value={form.current_company} onChange={v=>set("current_company",v)}/>
         <Field label="Years Experience" value={form.years_experience} onChange={v=>set("years_experience",v)} type="number"/>
-        <Sel label="Status" value={form.active_status} onChange={v=>set("active_status",v)} options={[{value:"active",label:"Active — Looking"},{value:"passive",label:"Passive — Open"},{value:"placed",label:"Placed / Unavailable"},{value:"do_not_contact",label:"Do Not Contact"}]}/>
+        <Sel label="Status" value={form.active_status} onChange={v=>set("active_status",v)} options={[
+          {value:"active",label:"Active — Looking"},{value:"passive",label:"Passive — Open"},
+          {value:"placed",label:"Placed / Unavailable"},{value:"do_not_contact",label:"Do Not Contact"}
+        ]}/>
       </div>
-      {form.candidate_type==="emr"&&(
+
+      {form.candidate_type==="emr" && (
         <div style={{marginBottom:16}}>
           <label style={{display:"block",fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:8,letterSpacing:0.5,textTransform:"uppercase"}}>EMR Proficiencies</label>
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
@@ -252,24 +300,30 @@ const CandidateForm = ({ candidate, onSave, onCancel }) => {
           </div>
         </div>
       )}
+
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 16px"}}>
         <Field label="Available Date" value={form.available_date} onChange={v=>set("available_date",v)} type="date"/>
         <Field label="Last Contacted" value={form.last_contacted} onChange={v=>set("last_contacted",v)} type="date"/>
         <Field label="Pay Min ($/hr or salary)" value={form.comp_min} onChange={v=>set("comp_min",v)}/>
         <Field label="Pay Max ($/hr or salary)" value={form.comp_max} onChange={v=>set("comp_max",v)}/>
       </div>
-      <Field label="Skills / Tech Stack" value={form.skills} onChange={v=>set("skills",v)} placeholder="Comma separated: Epic, SQL, Python, Project Management..."/>
+
+      <Field label="Skills / Tech Stack" value={form.skills} onChange={v=>set("skills",v)} placeholder="Comma separated: Epic, SQL, Python..."/>
       <Field label="Target Roles / Seniority" value={form.target_roles} onChange={v=>set("target_roles",v)} placeholder="e.g. IT Project Manager, Director of IT..."/>
+
       <div style={{marginBottom:16}}>
         <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",fontSize:13}}>
           <input type="checkbox" checked={form.travel_willing||false} onChange={e=>set("travel_willing",e.target.checked)} style={{width:16,height:16,accentColor:C.accent}}/>
           <span>Willing to travel</span>
         </label>
       </div>
+
       <div style={{marginBottom:20}}>
         <label style={{display:"block",fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:6,letterSpacing:0.5,textTransform:"uppercase"}}>Notes</label>
-        <textarea value={form.notes||""} onChange={e=>set("notes",e.target.value)} rows={3} placeholder="Quick notes about this candidate..." style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,resize:"vertical",outline:"none"}}/>
+        <textarea value={form.notes||""} onChange={e=>set("notes",e.target.value)} rows={3} placeholder="Quick notes about this candidate..."
+          style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,resize:"vertical",outline:"none"}}/>
       </div>
+
       <div style={{display:"flex",gap:12,justifyContent:"flex-end"}}>
         <Btn variant="secondary" onClick={onCancel}>Cancel</Btn>
         <Btn onClick={()=>onSave(form)}>Save Candidate</Btn>
@@ -278,17 +332,23 @@ const CandidateForm = ({ candidate, onSave, onCancel }) => {
   );
 };
 
+// ── ICP Form ──────────────────────────────────────────────
 const ICPForm = ({ icp, onSave, onCancel }) => {
-  const [form,setForm] = useState(icp||{name:"",icp_type:"emr",required_emr_systems:[],required_skills:[],min_years_experience:"",travel_required:false,notes:""});
-  const [skillInput,setSkillInput] = useState("");
-  const set = (k,v) => setForm(f=>({...f,[k]:v}));
-  const toggleEMR = (emr) => { const c=form.required_emr_systems||[]; set("required_emr_systems",c.includes(emr)?c.filter(e=>e!==emr):[...c,emr]); };
-  const addSkill = () => { if(skillInput.trim()){set("required_skills",[...(form.required_skills||[]),skillInput.trim()]);setSkillInput("");} };
+  const [form, setForm] = useState(icp || {name:"",icp_type:"emr",required_emr_systems:[],required_skills:[],min_years_experience:"",travel_required:false,notes:""});
+  const [skillInput, setSkillInput] = useState("");
+  const set = (k, v) => setForm(f => ({...f, [k]: v}));
+  const toggleEMR = (emr) => {
+    const c = form.required_emr_systems || [];
+    set("required_emr_systems", c.includes(emr) ? c.filter(e=>e!==emr) : [...c, emr]);
+  };
+  const addSkill = () => {
+    if (skillInput.trim()) { set("required_skills", [...(form.required_skills||[]), skillInput.trim()]); setSkillInput(""); }
+  };
 
   return (
     <div style={{maxWidth:560,margin:"0 auto"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
-        <h2 style={{fontSize:18,fontWeight:700}}>{icp?.id?"Edit ICP":"New Ideal Candidate Profile"}</h2>
+        <h2 style={{fontSize:18,fontWeight:700}}>{icp?.id ? "Edit ICP" : "New Ideal Candidate Profile"}</h2>
         <Btn variant="ghost" onClick={onCancel}>✕</Btn>
       </div>
       <Field label="ICP Name" value={form.name} onChange={v=>set("name",v)} placeholder="e.g. eCW Trainer, Senior IT PM" required/>
@@ -297,7 +357,7 @@ const ICPForm = ({ icp, onSave, onCancel }) => {
           <button key={t.v} onClick={()=>set("icp_type",t.v)} style={{flex:1,padding:10,borderRadius:10,border:`2px solid ${form.icp_type===t.v?C.accent:C.border}`,background:form.icp_type===t.v?C.accentSoft:C.surface,color:form.icp_type===t.v?C.accent:C.textSecondary,fontWeight:600,fontSize:13,cursor:"pointer"}}>{t.label}</button>
         ))}
       </div>
-      {form.icp_type==="emr"&&(
+      {form.icp_type==="emr" && (
         <div style={{marginBottom:16}}>
           <label style={{display:"block",fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:8,letterSpacing:0.5,textTransform:"uppercase"}}>Required EMR Systems</label>
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
@@ -310,13 +370,14 @@ const ICPForm = ({ icp, onSave, onCancel }) => {
       <div style={{marginBottom:16}}>
         <label style={{display:"block",fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:8,letterSpacing:0.5,textTransform:"uppercase"}}>Required Skills</label>
         <div style={{display:"flex",gap:8,marginBottom:8}}>
-          <input value={skillInput} onChange={e=>setSkillInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addSkill()} placeholder="Add skill and press Enter" style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",color:C.textPrimary,fontSize:13,outline:"none"}}/>
+          <input value={skillInput} onChange={e=>setSkillInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addSkill()} placeholder="Add skill and press Enter"
+            style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",color:C.textPrimary,fontSize:13,outline:"none"}}/>
           <Btn size="sm" onClick={addSkill}>Add</Btn>
         </div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
           {(form.required_skills||[]).map((s,i)=>(
             <span key={i} style={{background:C.accentSoft,color:C.accent,padding:"4px 10px",borderRadius:20,fontSize:12,display:"flex",alignItems:"center",gap:6}}>
-              {s}<button onClick={()=>set("required_skills",form.required_skills.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontSize:14,lineHeight:1}}>×</button>
+              {s}<button onClick={()=>set("required_skills",form.required_skills.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontSize:14}}>×</button>
             </span>
           ))}
         </div>
@@ -330,7 +391,8 @@ const ICPForm = ({ icp, onSave, onCancel }) => {
       </div>
       <div style={{marginBottom:20}}>
         <label style={{display:"block",fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:6,letterSpacing:0.5,textTransform:"uppercase"}}>Notes</label>
-        <textarea value={form.notes||""} onChange={e=>set("notes",e.target.value)} rows={2} style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,resize:"vertical",outline:"none"}}/>
+        <textarea value={form.notes||""} onChange={e=>set("notes",e.target.value)} rows={2}
+          style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,resize:"vertical",outline:"none"}}/>
       </div>
       <div style={{display:"flex",gap:12,justifyContent:"flex-end"}}>
         <Btn variant="secondary" onClick={onCancel}>Cancel</Btn>
@@ -340,9 +402,10 @@ const ICPForm = ({ icp, onSave, onCancel }) => {
   );
 };
 
+// ── Candidate Detail ──────────────────────────────────────
 const CandidateDetail = ({ candidate, icps, onEdit, onClose, onDelete }) => {
-  const isEMR = candidate.candidate_type==="emr";
-  const relevantICPs = icps.filter(i=>i.icp_type===candidate.candidate_type);
+  const isEMR = candidate.candidate_type === "emr";
+  const relevantICPs = icps.filter(i => i.icp_type === candidate.candidate_type);
   return (
     <div>
       <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:24}}>
@@ -360,106 +423,166 @@ const CandidateDetail = ({ candidate, icps, onEdit, onClose, onDelete }) => {
         </div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
-        {[{label:"Email",value:candidate.email},{label:"Phone",value:candidate.phone},{label:"Location",value:candidate.location},{label:"Experience",value:candidate.years_experience?`${candidate.years_experience} years`:null},{label:"Status",value:candidate.active_status?.replace(/_/g," ")},{label:"Available",value:candidate.available_date},{label:"Last Contacted",value:candidate.last_contacted},{label:"Travel",value:candidate.travel_willing?"Yes":"No"},{label:"Pay Range",value:candidate.comp_min||candidate.comp_max?`$${candidate.comp_min||"?"}–$${candidate.comp_max||"?"}`:null}].filter(i=>i.value).map(item=>(
+        {[
+          {label:"Email",value:candidate.email},{label:"Phone",value:candidate.phone},
+          {label:"Location",value:candidate.location},{label:"Experience",value:candidate.years_experience?`${candidate.years_experience} years`:null},
+          {label:"Status",value:candidate.active_status?.replace(/_/g," ")},{label:"Available",value:candidate.available_date},
+          {label:"Last Contacted",value:candidate.last_contacted},{label:"Travel",value:candidate.travel_willing?"Yes":"No"},
+          {label:"Pay Range",value:candidate.comp_min||candidate.comp_max?`$${candidate.comp_min||"?"}–$${candidate.comp_max||"?"}`:null}
+        ].filter(i=>i.value).map(item=>(
           <div key={item.label}>
             <div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:3}}>{item.label}</div>
             <div style={{fontSize:13}}>{item.value}</div>
           </div>
         ))}
       </div>
-      {candidate.linkedin_url&&<a href={candidate.linkedin_url} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:6,color:C.accent,fontSize:13,marginBottom:16,textDecoration:"none"}}>🔗 LinkedIn Profile</a>}
-      {candidate.emr_systems?.length>0&&<div style={{marginBottom:16}}><div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>EMR Systems</div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{candidate.emr_systems.map(e=><Badge key={e} color="emr">{e}</Badge>)}</div></div>}
-      {candidate.skills&&<div style={{marginBottom:16}}><div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Skills</div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{candidate.skills.split(",").map(s=>s.trim()).filter(Boolean).map(s=><Badge key={s} color="muted">{s}</Badge>)}</div></div>}
-      {candidate.target_roles&&<div style={{marginBottom:16}}><div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Target Roles</div><div style={{fontSize:13}}>{candidate.target_roles}</div></div>}
-      {candidate.notes&&<div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:14,marginBottom:16}}><div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Notes</div><div style={{fontSize:13,color:C.textSecondary,lineHeight:1.6}}>{candidate.notes}</div></div>}
-      {relevantICPs.length>0&&<div><div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>ICP Scores</div><div style={{display:"flex",flexDirection:"column",gap:8}}>{relevantICPs.map(icp=>{const score=scoreCandidate(candidate,icp);return(<div key={icp.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px"}}><span style={{fontSize:13,fontWeight:500}}>{icp.name}</span><ScoreBadge score={score}/></div>);})}</div></div>}
+      {candidate.linkedin_url && <a href={candidate.linkedin_url} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:6,color:C.accent,fontSize:13,marginBottom:16,textDecoration:"none"}}>🔗 LinkedIn Profile</a>}
+      {candidate.emr_systems?.length>0 && <div style={{marginBottom:16}}><div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>EMR Systems</div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{candidate.emr_systems.map(e=><Badge key={e} color="emr">{e}</Badge>)}</div></div>}
+      {candidate.skills && <div style={{marginBottom:16}}><div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Skills</div><div style={{display:"flex",flexWrap:"wrap",gap:6}}>{candidate.skills.split(",").map(s=>s.trim()).filter(Boolean).map(s=><Badge key={s} color="muted">{s}</Badge>)}</div></div>}
+      {candidate.target_roles && <div style={{marginBottom:16}}><div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Target Roles</div><div style={{fontSize:13}}>{candidate.target_roles}</div></div>}
+      {candidate.notes && <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:14,marginBottom:16}}><div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Notes</div><div style={{fontSize:13,color:C.textSecondary,lineHeight:1.6}}>{candidate.notes}</div></div>}
+      {relevantICPs.length>0 && (
+        <div>
+          <div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>ICP Scores</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {relevantICPs.map(icp=>{
+              const score = scoreCandidate(candidate, icp);
+              return <div key={icp.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px"}}><span style={{fontSize:13,fontWeight:500}}>{icp.name}</span><ScoreBadge score={score}/></div>;
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-function App() {
-  const [session,setSession] = useState(null);
-  const [loading,setLoading] = useState(true);
-  const [dbError,setDbError] = useState(false);
-  const [candidates,setCandidates] = useState([]);
-  const [icps,setICPs] = useState([]);
-  const [view,setView] = useState("candidates");
-  const [modal,setModal] = useState(null);
-  const [selected,setSelected] = useState(null);
-  const [search,setSearch] = useState("");
-  const [filterType,setFilterType] = useState("all");
-  const [filterStatus,setFilterStatus] = useState("all");
-  const [matchICP,setMatchICP] = useState("");
-  const [bulkUpload,setBulkUpload] = useState(null); // {files, current, total, done, errors}
+// ── Settings ──────────────────────────────────────────────
+const SettingsView = () => {
+  const [key, setKey] = useState(localStorage.getItem("anthropic_api_key")||"");
+  const [saved, setSaved] = useState(false);
+  const hasKey = !!localStorage.getItem("anthropic_api_key");
+  const save = () => { localStorage.setItem("anthropic_api_key", key); setSaved(true); setTimeout(()=>setSaved(false),2000); };
+  const clear = () => { localStorage.removeItem("anthropic_api_key"); setKey(""); };
+  return (
+    <div style={{maxWidth:560}}>
+      <div style={{marginBottom:24}}>
+        <h1 style={{fontSize:22,fontWeight:700,marginBottom:4}}>Settings</h1>
+        <p style={{color:C.textSecondary,fontSize:13}}>Configure your API keys and preferences</p>
+      </div>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:24}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+          <span style={{fontSize:16}}>⚡</span>
+          <h3 style={{fontSize:14,fontWeight:700}}>Anthropic API Key</h3>
+          {hasKey && <Badge color="success">Active</Badge>}
+        </div>
+        <p style={{fontSize:12,color:C.textSecondary,marginBottom:16,lineHeight:1.6}}>Required for AI resume parsing. Stored locally in your browser only.</p>
+        <div style={{display:"flex",gap:8}}>
+          <input type="password" value={key} onChange={e=>setKey(e.target.value)} placeholder="sk-ant-api03-..."
+            style={{flex:1,background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}/>
+          <Btn onClick={save}>{saved?"✓ Saved":"Save"}</Btn>
+          {hasKey && <Btn variant="danger" onClick={clear}>Clear</Btn>}
+        </div>
+        <p style={{fontSize:11,color:C.textMuted,marginTop:10}}>Get your key at console.anthropic.com · ~$0.01 per resume parsed</p>
+      </div>
+    </div>
+  );
+};
 
-  useEffect(()=>{
-    (async()=>{
+// ── Main App ──────────────────────────────────────────────
+function App() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [dbError, setDbError] = useState(false);
+  const [candidates, setCandidates] = useState([]);
+  const [icps, setICPs] = useState([]);
+  const [view, setView] = useState("candidates");
+  const [modal, setModal] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [search, setSearch] = useState("");
+  const [filterType, setFilterType] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [matchICP, setMatchICP] = useState("");
+  const [bulkUpload, setBulkUpload] = useState(null);
+
+  useEffect(() => {
+    (async () => {
       const token = await getSession();
-      if(token){setSession(token);await loadData(token);}
+      if (token) { setSession(token); await loadData(token); }
       setLoading(false);
     })();
-  },[]);
+  }, []);
 
   const loadData = async (token) => {
     try {
-      const [cands,icpList] = await Promise.all([dbFetch("candidates?order=created_at.desc",token),dbFetch("icps?order=created_at.desc",token)]);
-      setCandidates(cands||[]); setICPs(icpList||[]); setDbError(false);
-    } catch(err){ if(err.message.includes("relation")||err.message.includes("does not exist")){setDbError(true);} }
+      const [cands, icpList] = await Promise.all([
+        dbFetch("candidates?order=created_at.desc", token),
+        dbFetch("icps?order=created_at.desc", token)
+      ]);
+      setCandidates(cands || []); setICPs(icpList || []); setDbError(false);
+    } catch(err) {
+      if (err.message.includes("relation") || err.message.includes("does not exist")) setDbError(true);
+    }
   };
 
   const saveCandidate = async (form) => {
     try {
-      const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {headers: supabaseHeaders(session)});
-      const userData = await userRes.json();
-      const user_id = userData.id;
-      const payload={...form,user_id,years_experience:form.years_experience?parseInt(form.years_experience):null,comp_min:form.comp_min||null,comp_max:form.comp_max||null,available_date:form.available_date||null,last_contacted:form.last_contacted||null};
-      if(form.id){const{id,created_at,user_id:_,...u}=payload;await dbFetch(`candidates?id=eq.${form.id}`,session,{method:"PATCH",body:JSON.stringify(u)});}
-      else{await dbFetch("candidates",session,{method:"POST",body:JSON.stringify(payload)});}
+      const user_id = await getUserId(session);
+      const payload = {
+        ...form, user_id,
+        years_experience: form.years_experience ? parseInt(form.years_experience) : null,
+        comp_min: form.comp_min || null, comp_max: form.comp_max || null,
+        available_date: form.available_date || null, last_contacted: form.last_contacted || null
+      };
+      if (form.id) {
+        const {id, created_at, user_id: _, ...u} = payload;
+        await dbFetch(`candidates?id=eq.${form.id}`, session, {method:"PATCH", body:JSON.stringify(u)});
+      } else {
+        await dbFetch("candidates", session, {method:"POST", body:JSON.stringify(payload)});
+      }
       await loadData(session); setModal(null);
-    } catch(err){alert("Error saving: "+err.message);}
+    } catch(err) { alert("Error saving: " + err.message); }
   };
 
   const deleteCandidate = async (id) => {
-    if(!confirm("Delete this candidate?"))return;
-    await dbFetch(`candidates?id=eq.${id}`,session,{method:"DELETE"});
+    if (!confirm("Delete this candidate?")) return;
+    await dbFetch(`candidates?id=eq.${id}`, session, {method:"DELETE"});
     await loadData(session); setModal(null);
   };
 
   const saveICP = async (form) => {
     try {
-      const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {headers: supabaseHeaders(session)});
-      const userData = await userRes.json();
-      const user_id = userData.id;
-      const payload={...form,user_id,min_years_experience:form.min_years_experience?parseInt(form.min_years_experience):null};
-      if(form.id){const{id,created_at,user_id:_,...u}=payload;await dbFetch(`icps?id=eq.${form.id}`,session,{method:"PATCH",body:JSON.stringify(u)});}
-      else{await dbFetch("icps",session,{method:"POST",body:JSON.stringify(payload)});}
+      const user_id = await getUserId(session);
+      const payload = {...form, user_id, min_years_experience: form.min_years_experience ? parseInt(form.min_years_experience) : null};
+      if (form.id) {
+        const {id, created_at, user_id: _, ...u} = payload;
+        await dbFetch(`icps?id=eq.${form.id}`, session, {method:"PATCH", body:JSON.stringify(u)});
+      } else {
+        await dbFetch("icps", session, {method:"POST", body:JSON.stringify(payload)});
+      }
       await loadData(session); setModal(null);
-    } catch(err){alert("Error saving: "+err.message);}
+    } catch(err) { alert("Error saving: " + err.message); }
   };
 
   const deleteICP = async (id) => {
-    if(!confirm("Delete this ICP?"))return;
-    await dbFetch(`icps?id=eq.${id}`,session,{method:"DELETE"});
+    if (!confirm("Delete this ICP?")) return;
+    await dbFetch(`icps?id=eq.${id}`, session, {method:"DELETE"});
     await loadData(session); setModal(null);
   };
 
   const handleBulkUpload = async (e) => {
     const files = Array.from(e.target.files).filter(f => f.name.match(/\.(pdf|docx|txt)$/i));
     if (!files.length) return;
-    const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {headers: supabaseHeaders(session)});
-    const userData = await userRes.json();
-    const user_id = userData.id;
-    setBulkUpload({current:0, total:files.length, done:[], errors:[], running:true});
+    const user_id = await getUserId(session);
+    setBulkUpload({current:0, total:files.length, done:[], errors:[], running:true, currentName:""});
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      setBulkUpload(b=>({...b, current:i+1, currentName:file.name}));
+      setBulkUpload(b => ({...b, current:i+1, currentName:file.name}));
       try {
         const text = await extractText(file);
-        if (!text || text.trim().length < 30) throw new Error("No text");
+        if (!text || text.trim().length < 30) throw new Error("No text extracted");
         const parsed = await parseResumeWithAI(text);
         const payload = {
-          ...parsed,
-          user_id,
+          ...parsed, user_id,
           emr_systems: Array.isArray(parsed.emr_systems) ? parsed.emr_systems : [],
           skills: Array.isArray(parsed.skills) ? parsed.skills.join(", ") : parsed.skills || "",
           years_experience: parsed.years_experience ? parseInt(parsed.years_experience) : null,
@@ -467,29 +590,41 @@ function App() {
           active_status: "active"
         };
         await dbFetch("candidates", session, {method:"POST", body:JSON.stringify(payload)});
-        setBulkUpload(b=>({...b, done:[...b.done, {name:file.name, candidate:`${parsed.first_name} ${parsed.last_name}`}]}));
+        setBulkUpload(b => ({...b, done:[...b.done, {name:file.name, candidate:`${parsed.first_name} ${parsed.last_name}`}]}));
       } catch(err) {
-        setBulkUpload(b=>({...b, errors:[...b.errors, {name:file.name, error:err.message}]}));
+        setBulkUpload(b => ({...b, errors:[...b.errors, {name:file.name}]}));
       }
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 400));
     }
-    setBulkUpload(b=>({...b, running:false}));
+    setBulkUpload(b => ({...b, running:false}));
     await loadData(session);
+    e.target.value = "";
   };
 
-  const filtered = candidates.filter(c=>{
-    const q=search.toLowerCase();
-    return (!q||`${c.first_name} ${c.last_name} ${c.current_title} ${c.location} ${(c.emr_systems||[]).join(" ")} ${c.skills||""}`.toLowerCase().includes(q))&&(filterType==="all"||c.candidate_type===filterType)&&(filterStatus==="all"||c.active_status===filterStatus);
+  const filtered = candidates.filter(c => {
+    const q = search.toLowerCase();
+    return (!q || `${c.first_name} ${c.last_name} ${c.current_title} ${c.location} ${(c.emr_systems||[]).join(" ")} ${c.skills||""}`.toLowerCase().includes(q))
+      && (filterType==="all" || c.candidate_type===filterType)
+      && (filterStatus==="all" || c.active_status===filterStatus);
   });
-  const sorted = matchICP?[...filtered].sort((a,b)=>{const icp=icps.find(i=>i.id===matchICP);return(scoreCandidate(b,icp)||0)-(scoreCandidate(a,icp)||0);}):filtered;
-  const benchGaps = EMR_SYSTEMS.map(emr=>({emr,available:candidates.filter(c=>c.candidate_type==="emr"&&(c.emr_systems||[]).includes(emr)&&c.active_status==="active").length,total:candidates.filter(c=>c.candidate_type==="emr"&&(c.emr_systems||[]).includes(emr)).length}));
-  const navItems=[{id:"candidates",label:"Candidates",icon:"👤"},{id:"icps",label:"ICPs",icon:"🎯"},{id:"bench",label:"Bench Gaps",icon:"📊"},{id:"settings",label:"Settings",icon:"⚙️"}];
+  const sorted = matchICP ? [...filtered].sort((a,b) => {
+    const icp = icps.find(i=>i.id===matchICP);
+    return (scoreCandidate(b,icp)||0) - (scoreCandidate(a,icp)||0);
+  }) : filtered;
+  const benchGaps = EMR_SYSTEMS.map(emr => ({
+    emr,
+    available: candidates.filter(c=>c.candidate_type==="emr"&&(c.emr_systems||[]).includes(emr)&&c.active_status==="active").length,
+    total: candidates.filter(c=>c.candidate_type==="emr"&&(c.emr_systems||[]).includes(emr)).length
+  }));
+  const navItems = [{id:"candidates",label:"Candidates",icon:"👤"},{id:"icps",label:"ICPs",icon:"🎯"},{id:"bench",label:"Bench Gaps",icon:"📊"},{id:"settings",label:"Settings",icon:"⚙️"}];
 
-  if(loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{color:C.textSecondary}}>Loading...</div></div>;
-  if(!session) return <LoginScreen/>;
+  if (loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{color:C.textSecondary}}>Loading...</div></div>;
+  if (!session) return <LoginScreen/>;
 
   return (
     <div style={{minHeight:"100vh",background:C.bg,display:"flex"}}>
+
+      {/* Sidebar */}
       <div style={{width:220,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:10}}>
         <div style={{padding:"24px 20px 16px"}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -501,7 +636,7 @@ function App() {
           {navItems.map(item=>(
             <button key={item.id} onClick={()=>{setView(item.id);setModal(null);}} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,border:"none",cursor:"pointer",marginBottom:2,background:view===item.id?C.accentSoft:"transparent",color:view===item.id?C.accent:C.textSecondary,fontSize:13,fontWeight:view===item.id?600:400,textAlign:"left"}}>
               <span>{item.icon}</span>{item.label}
-              {item.id==="candidates"&&<span style={{marginLeft:"auto",fontSize:11,background:C.border,padding:"1px 7px",borderRadius:10,color:C.textMuted}}>{candidates.length}</span>}
+              {item.id==="candidates" && <span style={{marginLeft:"auto",fontSize:11,background:C.border,padding:"1px 7px",borderRadius:10,color:C.textMuted}}>{candidates.length}</span>}
             </button>
           ))}
         </nav>
@@ -510,25 +645,28 @@ function App() {
         </div>
       </div>
 
+      {/* Main content */}
       <div style={{marginLeft:220,flex:1,padding:32,maxWidth:"calc(100vw - 220px)",overflowX:"hidden"}}>
-        {dbError&&<div style={{background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:10,padding:16,marginBottom:24}}><div style={{fontWeight:600,color:C.warning,marginBottom:6}}>⚠️ Database setup needed</div><div style={{fontSize:13,color:C.textSecondary}}>Run supabase-setup.sql in your Supabase Dashboard → SQL Editor.</div></div>}
 
-        {bulkUpload&&(
+        {dbError && <div style={{background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:10,padding:16,marginBottom:24}}><div style={{fontWeight:600,color:C.warning,marginBottom:6}}>⚠️ Database setup needed</div><div style={{fontSize:13,color:C.textSecondary}}>Run supabase-setup.sql in Supabase Dashboard → SQL Editor.</div></div>}
+
+        {/* Bulk upload progress modal */}
+        {bulkUpload && (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
             <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:16,padding:32,width:"100%",maxWidth:520}}>
               <h2 style={{fontSize:18,fontWeight:700,marginBottom:6}}>Bulk Upload</h2>
-              <p style={{fontSize:13,color:C.textSecondary,marginBottom:20}}>{bulkUpload.running ? `Processing ${bulkUpload.current} of ${bulkUpload.total}...` : `Done — ${bulkUpload.done.length} imported, ${bulkUpload.errors.length} failed`}</p>
-
-              {bulkUpload.running&&(
-                <div>
+              <p style={{fontSize:13,color:C.textSecondary,marginBottom:20}}>
+                {bulkUpload.running ? `Processing ${bulkUpload.current} of ${bulkUpload.total}...` : `Complete — ${bulkUpload.done.length} imported, ${bulkUpload.errors.length} failed`}
+              </p>
+              {bulkUpload.running && (
+                <div style={{marginBottom:20}}>
                   <div style={{background:C.surface,borderRadius:8,height:8,marginBottom:8,overflow:"hidden"}}>
                     <div style={{width:`${(bulkUpload.current/bulkUpload.total)*100}%`,height:"100%",background:C.accent,borderRadius:8,transition:"width 0.3s"}}/>
                   </div>
-                  <div style={{fontSize:12,color:C.textMuted,marginBottom:20}}>📄 {bulkUpload.currentName}</div>
+                  <div style={{fontSize:12,color:C.textMuted}}>📄 {bulkUpload.currentName}</div>
                 </div>
               )}
-
-              {bulkUpload.done.length>0&&(
+              {bulkUpload.done.length>0 && (
                 <div style={{marginBottom:16}}>
                   <div style={{fontSize:11,fontWeight:600,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>✓ Imported ({bulkUpload.done.length})</div>
                   <div style={{maxHeight:160,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
@@ -538,8 +676,7 @@ function App() {
                   </div>
                 </div>
               )}
-
-              {bulkUpload.errors.length>0&&(
+              {bulkUpload.errors.length>0 && (
                 <div style={{marginBottom:20}}>
                   <div style={{fontSize:11,fontWeight:600,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>✗ Failed ({bulkUpload.errors.length})</div>
                   <div style={{maxHeight:100,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
@@ -549,29 +686,33 @@ function App() {
                   </div>
                 </div>
               )}
-
-              {!bulkUpload.running&&(
-                <Btn onClick={()=>setBulkUpload(null)}>Done</Btn>
-              )}
+              {!bulkUpload.running && <Btn onClick={()=>setBulkUpload(null)}>Done</Btn>}
             </div>
           </div>
         )}
+
+        {/* Regular modals */}
+        {modal && (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 20px",overflowY:"auto"}}>
             <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:16,padding:32,width:"100%",maxWidth:720}}>
-              {modal==="add_candidate"&&<CandidateForm onSave={saveCandidate} onCancel={()=>setModal(null)}/>}
-              {modal==="edit_candidate"&&<CandidateForm candidate={selected} onSave={saveCandidate} onCancel={()=>setModal(null)}/>}
-              {modal==="add_icp"&&<ICPForm onSave={saveICP} onCancel={()=>setModal(null)}/>}
-              {modal==="edit_icp"&&<ICPForm icp={selected} onSave={saveICP} onCancel={()=>setModal(null)}/>}
-              {modal==="detail"&&<CandidateDetail candidate={selected} icps={icps} onEdit={()=>setModal("edit_candidate")} onClose={()=>setModal(null)} onDelete={()=>deleteCandidate(selected.id)}/>}
+              {modal==="add_candidate" && <CandidateForm onSave={saveCandidate} onCancel={()=>setModal(null)}/>}
+              {modal==="edit_candidate" && <CandidateForm candidate={selected} onSave={saveCandidate} onCancel={()=>setModal(null)}/>}
+              {modal==="add_icp" && <ICPForm onSave={saveICP} onCancel={()=>setModal(null)}/>}
+              {modal==="edit_icp" && <ICPForm icp={selected} onSave={saveICP} onCancel={()=>setModal(null)}/>}
+              {modal==="detail" && <CandidateDetail candidate={selected} icps={icps} onEdit={()=>setModal("edit_candidate")} onClose={()=>setModal(null)} onDelete={()=>deleteCandidate(selected.id)}/>}
             </div>
           </div>
         )}
 
-        {view==="candidates"&&(
+        {/* Candidates view */}
+        {view==="candidates" && (
           <div>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
-              <div><h1 style={{fontSize:22,fontWeight:700,marginBottom:4}}>Candidates</h1><p style={{color:C.textSecondary,fontSize:13}}>{candidates.length} total · {candidates.filter(c=>c.active_status==="active").length} active</p></div>
-              <div style={{display:"flex",gap:10}}>
+              <div>
+                <h1 style={{fontSize:22,fontWeight:700,marginBottom:4}}>Candidates</h1>
+                <p style={{color:C.textSecondary,fontSize:13}}>{candidates.length} total · {candidates.filter(c=>c.active_status==="active").length} active</p>
+              </div>
+              <div style={{display:"flex",gap:10,alignItems:"center"}}>
                 <label style={{cursor:"pointer"}}>
                   <span style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:600,color:C.textPrimary,cursor:"pointer",display:"inline-block"}}>📁 Bulk Upload</span>
                   <input type="file" multiple accept=".pdf,.docx,.txt" onChange={handleBulkUpload} style={{display:"none"}}/>
@@ -579,73 +720,86 @@ function App() {
                 <Btn onClick={()=>{setSelected(null);setModal("add_candidate");}}>+ Add Candidate</Btn>
               </div>
             </div>
+
             <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, title, EMR, location..." style={{flex:1,minWidth:200,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}/>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, title, EMR, location..."
+                style={{flex:1,minWidth:200,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}/>
               <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}>
                 <option value="all">All Types</option><option value="emr">EMR Project</option><option value="it_leadership">IT / Leadership</option>
               </select>
               <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}>
                 <option value="all">All Statuses</option><option value="active">Active</option><option value="passive">Passive</option><option value="placed">Placed</option>
               </select>
-              {icps.length>0&&<select value={matchICP} onChange={e=>setMatchICP(e.target.value)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}>
-                <option value="">Sort by ICP match...</option>
-                {icps.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
-              </select>}
+              {icps.length>0 && (
+                <select value={matchICP} onChange={e=>setMatchICP(e.target.value)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}>
+                  <option value="">Sort by ICP match...</option>
+                  {icps.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+                </select>
+              )}
             </div>
-            {sorted.length===0?(
+
+            {sorted.length===0 ? (
               <div style={{textAlign:"center",padding:"60px 20px",color:C.textMuted}}>
                 <div style={{fontSize:40,marginBottom:16}}>👤</div>
                 <div style={{fontSize:15,fontWeight:600,marginBottom:8,color:C.textSecondary}}>No candidates yet</div>
-                <div style={{fontSize:13,marginBottom:20}}>Add your first candidate or upload a resume to get started</div>
+                <div style={{fontSize:13,marginBottom:20}}>Add your first candidate or use Bulk Upload to import resumes</div>
                 <Btn onClick={()=>setModal("add_candidate")}>+ Add Candidate</Btn>
               </div>
-            ):(
+            ) : (
               <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
                 <table style={{width:"100%",borderCollapse:"collapse"}}>
-                  <thead><tr style={{borderBottom:`1px solid ${C.border}`}}>
-                    {["Name","Type","Title / Company","EMR / Skills","Status","Available",matchICP?"ICP Score":"Last Contact"].map(h=>(
-                      <th key={h} style={{padding:"12px 16px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.5}}>{h}</th>
-                    ))}
-                  </tr></thead>
-                  <tbody>{sorted.map((c,i)=>{
-                    const icp=matchICP?icps.find(x=>x.id===matchICP):null;
-                    const score=icp?scoreCandidate(c,icp):null;
-                    return(
-                      <tr key={c.id} onClick={()=>{setSelected(c);setModal("detail");}} style={{borderBottom:i<sorted.length-1?`1px solid ${C.border}`:"none",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHover} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                        <td style={{padding:"14px 16px"}}><div style={{fontWeight:600,fontSize:13}}>{c.first_name} {c.last_name}</div><div style={{fontSize:11,color:C.textMuted}}>{c.location}</div></td>
-                        <td style={{padding:"14px 16px"}}><Badge color={c.candidate_type==="emr"?"emr":"it"}>{c.candidate_type==="emr"?"EMR":"IT"}</Badge></td>
-                        <td style={{padding:"14px 16px",fontSize:12,color:C.textSecondary,maxWidth:160}}><div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.current_title}</div><div style={{fontSize:11,color:C.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.current_company}</div></td>
-                        <td style={{padding:"14px 16px"}}><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{c.candidate_type==="emr"?(c.emr_systems||[]).slice(0,3).map(e=><Badge key={e} color="emr" size="sm">{e}</Badge>):(c.skills||"").split(",").slice(0,2).filter(Boolean).map(s=><Badge key={s} color="muted" size="sm">{s.trim()}</Badge>)}</div></td>
-                        <td style={{padding:"14px 16px"}}><Badge color={c.active_status==="active"?"success":c.active_status==="passive"?"warning":"muted"}>{c.active_status?.replace(/_/g," ")}</Badge></td>
-                        <td style={{padding:"14px 16px",fontSize:12,color:C.textSecondary}}>{c.available_date||"—"}</td>
-                        <td style={{padding:"14px 16px"}}>{matchICP?<ScoreBadge score={score}/>:<span style={{fontSize:12,color:C.textSecondary}}>{c.last_contacted||"—"}</span>}</td>
-                      </tr>
-                    );
-                  })}</tbody>
+                  <thead>
+                    <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                      {["Name","Type","Title / Company","EMR / Skills","Status","Available",matchICP?"ICP Score":"Last Contact"].map(h=>(
+                        <th key={h} style={{padding:"12px 16px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.5}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map((c,i)=>{
+                      const icp = matchICP ? icps.find(x=>x.id===matchICP) : null;
+                      const score = icp ? scoreCandidate(c,icp) : null;
+                      return (
+                        <tr key={c.id} onClick={()=>{setSelected(c);setModal("detail");}}
+                          style={{borderBottom:i<sorted.length-1?`1px solid ${C.border}`:"none",cursor:"pointer"}}
+                          onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHover}
+                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                          <td style={{padding:"14px 16px"}}><div style={{fontWeight:600,fontSize:13}}>{c.first_name} {c.last_name}</div><div style={{fontSize:11,color:C.textMuted}}>{c.location}</div></td>
+                          <td style={{padding:"14px 16px"}}><Badge color={c.candidate_type==="emr"?"emr":"it"}>{c.candidate_type==="emr"?"EMR":"IT"}</Badge></td>
+                          <td style={{padding:"14px 16px",fontSize:12,color:C.textSecondary,maxWidth:160}}><div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.current_title}</div><div style={{fontSize:11,color:C.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.current_company}</div></td>
+                          <td style={{padding:"14px 16px"}}><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{c.candidate_type==="emr"?(c.emr_systems||[]).slice(0,3).map(e=><Badge key={e} color="emr" size="sm">{e}</Badge>):(c.skills||"").split(",").slice(0,2).filter(Boolean).map(s=><Badge key={s} color="muted" size="sm">{s.trim()}</Badge>)}</div></td>
+                          <td style={{padding:"14px 16px"}}><Badge color={c.active_status==="active"?"success":c.active_status==="passive"?"warning":"muted"}>{c.active_status?.replace(/_/g," ")}</Badge></td>
+                          <td style={{padding:"14px 16px",fontSize:12,color:C.textSecondary}}>{c.available_date||"—"}</td>
+                          <td style={{padding:"14px 16px"}}>{matchICP?<ScoreBadge score={score}/>:<span style={{fontSize:12,color:C.textSecondary}}>{c.last_contacted||"—"}</span>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
                 </table>
               </div>
             )}
           </div>
         )}
 
-        {view==="icps"&&(
+        {/* ICPs view */}
+        {view==="icps" && (
           <div>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
               <div><h1 style={{fontSize:22,fontWeight:700,marginBottom:4}}>Ideal Candidate Profiles</h1><p style={{color:C.textSecondary,fontSize:13}}>Define what great looks like for each role or EMR</p></div>
               <Btn onClick={()=>{setSelected(null);setModal("add_icp");}}>+ New ICP</Btn>
             </div>
-            {icps.length===0?(
+            {icps.length===0 ? (
               <div style={{textAlign:"center",padding:"60px 20px",color:C.textMuted}}>
                 <div style={{fontSize:40,marginBottom:16}}>🎯</div>
                 <div style={{fontSize:15,fontWeight:600,marginBottom:8,color:C.textSecondary}}>No ICPs yet</div>
                 <div style={{fontSize:13,marginBottom:20}}>Create an ICP for each EMR you staff for and your frequent IT roles</div>
                 <Btn onClick={()=>setModal("add_icp")}>+ New ICP</Btn>
               </div>
-            ):(
+            ) : (
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(300px, 1fr))",gap:16}}>
                 {icps.map(icp=>{
-                  const matchCount=candidates.filter(c=>{const s=scoreCandidate(c,icp);return s!==null&&s>=60;}).length;
-                  return(
+                  const matchCount = candidates.filter(c=>{const s=scoreCandidate(c,icp);return s!==null&&s>=60;}).length;
+                  return (
                     <div key={icp.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:20}}>
                       <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12}}>
                         <div><div style={{fontWeight:700,fontSize:15,marginBottom:6}}>{icp.name}</div><Badge color={icp.icp_type==="emr"?"emr":"it"}>{icp.icp_type==="emr"?"EMR Project":"IT / Leadership"}</Badge></div>
@@ -654,8 +808,8 @@ function App() {
                           <Btn variant="danger" size="sm" onClick={()=>deleteICP(icp.id)}>✕</Btn>
                         </div>
                       </div>
-                      {icp.required_emr_systems?.length>0&&<div style={{marginBottom:10}}><div style={{fontSize:11,color:C.textMuted,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5,fontWeight:600}}>Required EMRs</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{icp.required_emr_systems.map(e=><Badge key={e} color="emr" size="sm">{e}</Badge>)}</div></div>}
-                      {icp.required_skills?.length>0&&<div style={{marginBottom:10}}><div style={{fontSize:11,color:C.textMuted,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5,fontWeight:600}}>Required Skills</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{icp.required_skills.map(s=><Badge key={s} color="accent" size="sm">{s}</Badge>)}</div></div>}
+                      {icp.required_emr_systems?.length>0 && <div style={{marginBottom:10}}><div style={{fontSize:11,color:C.textMuted,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5,fontWeight:600}}>Required EMRs</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{icp.required_emr_systems.map(e=><Badge key={e} color="emr" size="sm">{e}</Badge>)}</div></div>}
+                      {icp.required_skills?.length>0 && <div style={{marginBottom:10}}><div style={{fontSize:11,color:C.textMuted,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5,fontWeight:600}}>Required Skills</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{icp.required_skills.map(s=><Badge key={s} color="accent" size="sm">{s}</Badge>)}</div></div>}
                       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
                         <span style={{fontSize:12,color:C.textSecondary}}>{icp.min_years_experience?`${icp.min_years_experience}+ yrs`:"Any exp"} · {icp.travel_required?"Travel req.":"No travel req."}</span>
                         <Badge color={matchCount>3?"success":matchCount>0?"warning":"danger"}>{matchCount} match{matchCount!==1?"es":""}</Badge>
@@ -668,7 +822,8 @@ function App() {
           </div>
         )}
 
-        {view==="bench"&&(
+        {/* Bench Gaps view */}
+        {view==="bench" && (
           <div>
             <div style={{marginBottom:24}}><h1 style={{fontSize:22,fontWeight:700,marginBottom:4}}>Bench Gaps</h1><p style={{color:C.textSecondary,fontSize:13}}>Where you're thin on available candidates by EMR system</p></div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(200px, 1fr))",gap:12,marginBottom:32}}>
@@ -689,7 +844,11 @@ function App() {
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:20}}>
               <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>IT / Leadership Bench</h3>
               <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:16}}>
-                {[{label:"Total IT/Leadership",value:candidates.filter(c=>c.candidate_type==="it_leadership").length},{label:"Active / Looking",value:candidates.filter(c=>c.candidate_type==="it_leadership"&&c.active_status==="active").length},{label:"Passive / Open",value:candidates.filter(c=>c.candidate_type==="it_leadership"&&c.active_status==="passive").length}].map(stat=>(
+                {[
+                  {label:"Total IT/Leadership",value:candidates.filter(c=>c.candidate_type==="it_leadership").length},
+                  {label:"Active / Looking",value:candidates.filter(c=>c.candidate_type==="it_leadership"&&c.active_status==="active").length},
+                  {label:"Passive / Open",value:candidates.filter(c=>c.candidate_type==="it_leadership"&&c.active_status==="passive").length}
+                ].map(stat=>(
                   <div key={stat.label} style={{textAlign:"center"}}>
                     <div style={{fontSize:32,fontWeight:700,fontFamily:"monospace",color:C.accent}}>{stat.value}</div>
                     <div style={{fontSize:12,color:C.textSecondary,marginTop:4}}>{stat.label}</div>
@@ -699,60 +858,10 @@ function App() {
             </div>
           </div>
         )}
-        {view==="settings"&&(
-          <SettingsView/>
-        )}
-      </div>
-    </div>
-  );
-}
 
-function SettingsView() {
-  const [key, setKey] = useState(localStorage.getItem("anthropic_api_key")||"");
-  const [saved, setSaved] = useState(false);
+        {/* Settings view */}
+        {view==="settings" && <SettingsView/>}
 
-  const save = () => {
-    localStorage.setItem("anthropic_api_key", key);
-    setSaved(true);
-    setTimeout(()=>setSaved(false), 2000);
-  };
-
-  const clear = () => {
-    localStorage.removeItem("anthropic_api_key");
-    setKey("");
-    setSaved(false);
-  };
-
-  const hasKey = !!localStorage.getItem("anthropic_api_key");
-
-  return (
-    <div style={{maxWidth:560}}>
-      <div style={{marginBottom:24}}>
-        <h1 style={{fontSize:22,fontWeight:700,marginBottom:4}}>Settings</h1>
-        <p style={{color:C.textSecondary,fontSize:13}}>Configure your API keys and preferences</p>
-      </div>
-
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:24,marginBottom:16}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
-          <span style={{fontSize:16}}>⚡</span>
-          <h3 style={{fontSize:14,fontWeight:700}}>Anthropic API Key</h3>
-          {hasKey&&<span style={{background:"rgba(34,197,94,0.12)",color:"#22C55E",padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:600}}>Active</span>}
-        </div>
-        <p style={{fontSize:12,color:C.textSecondary,marginBottom:16,lineHeight:1.6}}>Required for AI resume parsing. Your key is stored locally in your browser only — never sent to any server other than Anthropic.</p>
-        <div style={{display:"flex",gap:8}}>
-          <input
-            type="password"
-            value={key}
-            onChange={e=>setKey(e.target.value)}
-            placeholder="sk-ant-api03-..."
-            style={{flex:1,background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}
-          />
-          <button onClick={save} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 16px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
-            {saved?"✓ Saved":"Save"}
-          </button>
-          {hasKey&&<button onClick={clear} style={{background:"rgba(239,68,68,0.1)",color:"#EF4444",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>Clear</button>}
-        </div>
-        <p style={{fontSize:11,color:C.textMuted,marginTop:10}}>Get your key at console.anthropic.com · ~$0.01 per resume parsed</p>
       </div>
     </div>
   );
