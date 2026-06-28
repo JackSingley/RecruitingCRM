@@ -8,6 +8,7 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -36,6 +37,22 @@ const extractTextFromPDF = async (file) => {
     fullText += pageText + "\n";
   }
   return fullText;
+};
+
+const extractTextFromDOCX = async (file) => {
+  const arrayBuffer = await file.arrayBuffer();
+  const result = await mammoth.extractRawText({ arrayBuffer });
+  return result.value;
+};
+
+const extractText = async (file) => {
+  if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+    return await extractTextFromPDF(file);
+  } else if (file.name.endsWith(".docx") || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    return await extractTextFromDOCX(file);
+  } else {
+    return await file.text();
+  }
 };
 
 const { useState, useEffect } = React;
@@ -182,12 +199,7 @@ const CandidateForm = ({ candidate, onSave, onCancel }) => {
     const file = e.target.files[0]; if(!file) return;
     setParsing(true); setParseMsg("");
     try {
-      let text;
-      if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
-        text = await extractTextFromPDF(file);
-      } else {
-        text = await file.text();
-      }
+      const text = await extractText(file);
       if (!text || text.trim().length < 50) throw new Error("Could not extract text");
       const parsed = await parseResumeWithAI(text);
       setForm(f=>({...f,...parsed,emr_systems:Array.isArray(parsed.emr_systems)?parsed.emr_systems:[],skills:Array.isArray(parsed.skills)?parsed.skills.join(", "):parsed.skills||""}));
@@ -378,6 +390,7 @@ function App() {
   const [filterType,setFilterType] = useState("all");
   const [filterStatus,setFilterStatus] = useState("all");
   const [matchICP,setMatchICP] = useState("");
+  const [bulkUpload,setBulkUpload] = useState(null); // {files, current, total, done, errors}
 
   useEffect(()=>{
     (async()=>{
@@ -430,6 +443,40 @@ function App() {
     await loadData(session); setModal(null);
   };
 
+  const handleBulkUpload = async (e) => {
+    const files = Array.from(e.target.files).filter(f => f.name.match(/\.(pdf|docx|txt)$/i));
+    if (!files.length) return;
+    const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {headers: supabaseHeaders(session)});
+    const userData = await userRes.json();
+    const user_id = userData.id;
+    setBulkUpload({current:0, total:files.length, done:[], errors:[], running:true});
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setBulkUpload(b=>({...b, current:i+1, currentName:file.name}));
+      try {
+        const text = await extractText(file);
+        if (!text || text.trim().length < 30) throw new Error("No text");
+        const parsed = await parseResumeWithAI(text);
+        const payload = {
+          ...parsed,
+          user_id,
+          emr_systems: Array.isArray(parsed.emr_systems) ? parsed.emr_systems : [],
+          skills: Array.isArray(parsed.skills) ? parsed.skills.join(", ") : parsed.skills || "",
+          years_experience: parsed.years_experience ? parseInt(parsed.years_experience) : null,
+          available_date: null, last_contacted: null, comp_min: null, comp_max: null,
+          active_status: "active"
+        };
+        await dbFetch("candidates", session, {method:"POST", body:JSON.stringify(payload)});
+        setBulkUpload(b=>({...b, done:[...b.done, {name:file.name, candidate:`${parsed.first_name} ${parsed.last_name}`}]}));
+      } catch(err) {
+        setBulkUpload(b=>({...b, errors:[...b.errors, {name:file.name, error:err.message}]}));
+      }
+      await new Promise(r => setTimeout(r, 300));
+    }
+    setBulkUpload(b=>({...b, running:false}));
+    await loadData(session);
+  };
+
   const filtered = candidates.filter(c=>{
     const q=search.toLowerCase();
     return (!q||`${c.first_name} ${c.last_name} ${c.current_title} ${c.location} ${(c.emr_systems||[]).join(" ")} ${c.skills||""}`.toLowerCase().includes(q))&&(filterType==="all"||c.candidate_type===filterType)&&(filterStatus==="all"||c.active_status===filterStatus);
@@ -466,7 +513,49 @@ function App() {
       <div style={{marginLeft:220,flex:1,padding:32,maxWidth:"calc(100vw - 220px)",overflowX:"hidden"}}>
         {dbError&&<div style={{background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:10,padding:16,marginBottom:24}}><div style={{fontWeight:600,color:C.warning,marginBottom:6}}>⚠️ Database setup needed</div><div style={{fontSize:13,color:C.textSecondary}}>Run supabase-setup.sql in your Supabase Dashboard → SQL Editor.</div></div>}
 
-        {modal&&(
+        {bulkUpload&&(
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+            <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:16,padding:32,width:"100%",maxWidth:520}}>
+              <h2 style={{fontSize:18,fontWeight:700,marginBottom:6}}>Bulk Upload</h2>
+              <p style={{fontSize:13,color:C.textSecondary,marginBottom:20}}>{bulkUpload.running ? `Processing ${bulkUpload.current} of ${bulkUpload.total}...` : `Done — ${bulkUpload.done.length} imported, ${bulkUpload.errors.length} failed`}</p>
+
+              {bulkUpload.running&&(
+                <div>
+                  <div style={{background:C.surface,borderRadius:8,height:8,marginBottom:8,overflow:"hidden"}}>
+                    <div style={{width:`${(bulkUpload.current/bulkUpload.total)*100}%`,height:"100%",background:C.accent,borderRadius:8,transition:"width 0.3s"}}/>
+                  </div>
+                  <div style={{fontSize:12,color:C.textMuted,marginBottom:20}}>📄 {bulkUpload.currentName}</div>
+                </div>
+              )}
+
+              {bulkUpload.done.length>0&&(
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:11,fontWeight:600,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>✓ Imported ({bulkUpload.done.length})</div>
+                  <div style={{maxHeight:160,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+                    {bulkUpload.done.map((d,i)=>(
+                      <div key={i} style={{fontSize:12,color:C.success,background:"rgba(34,197,94,0.08)",padding:"4px 10px",borderRadius:6}}>{d.candidate} <span style={{color:C.textMuted}}>— {d.name}</span></div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {bulkUpload.errors.length>0&&(
+                <div style={{marginBottom:20}}>
+                  <div style={{fontSize:11,fontWeight:600,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>✗ Failed ({bulkUpload.errors.length})</div>
+                  <div style={{maxHeight:100,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+                    {bulkUpload.errors.map((d,i)=>(
+                      <div key={i} style={{fontSize:12,color:C.danger,background:"rgba(239,68,68,0.08)",padding:"4px 10px",borderRadius:6}}>{d.name}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {!bulkUpload.running&&(
+                <Btn onClick={()=>setBulkUpload(null)}>Done</Btn>
+              )}
+            </div>
+          </div>
+        )}
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:100,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 20px",overflowY:"auto"}}>
             <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:16,padding:32,width:"100%",maxWidth:720}}>
               {modal==="add_candidate"&&<CandidateForm onSave={saveCandidate} onCancel={()=>setModal(null)}/>}
@@ -482,7 +571,13 @@ function App() {
           <div>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
               <div><h1 style={{fontSize:22,fontWeight:700,marginBottom:4}}>Candidates</h1><p style={{color:C.textSecondary,fontSize:13}}>{candidates.length} total · {candidates.filter(c=>c.active_status==="active").length} active</p></div>
-              <Btn onClick={()=>{setSelected(null);setModal("add_candidate");}}>+ Add Candidate</Btn>
+              <div style={{display:"flex",gap:10}}>
+                <label style={{cursor:"pointer"}}>
+                  <span style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:600,color:C.textPrimary,cursor:"pointer",display:"inline-block"}}>📁 Bulk Upload</span>
+                  <input type="file" multiple accept=".pdf,.docx,.txt" onChange={handleBulkUpload} style={{display:"none"}}/>
+                </label>
+                <Btn onClick={()=>{setSelected(null);setModal("add_candidate");}}>+ Add Candidate</Btn>
+              </div>
             </div>
             <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
               <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, title, EMR, location..." style={{flex:1,minWidth:200,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}/>
