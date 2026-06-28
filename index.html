@@ -396,8 +396,11 @@ function App() {
 
   const saveCandidate = async (form) => {
     try {
-      const payload={...form,years_experience:form.years_experience?parseInt(form.years_experience):null,comp_min:form.comp_min||null,comp_max:form.comp_max||null,available_date:form.available_date||null,last_contacted:form.last_contacted||null};
-      if(form.id){const{id,created_at,user_id,...u}=payload;await dbFetch(`candidates?id=eq.${form.id}`,session,{method:"PATCH",body:JSON.stringify(u)});}
+      const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {headers: supabaseHeaders(session)});
+      const userData = await userRes.json();
+      const user_id = userData.id;
+      const payload={...form,user_id,years_experience:form.years_experience?parseInt(form.years_experience):null,comp_min:form.comp_min||null,comp_max:form.comp_max||null,available_date:form.available_date||null,last_contacted:form.last_contacted||null};
+      if(form.id){const{id,created_at,user_id:_,...u}=payload;await dbFetch(`candidates?id=eq.${form.id}`,session,{method:"PATCH",body:JSON.stringify(u)});}
       else{await dbFetch("candidates",session,{method:"POST",body:JSON.stringify(payload)});}
       await loadData(session); setModal(null);
     } catch(err){alert("Error saving: "+err.message);}
@@ -411,8 +414,11 @@ function App() {
 
   const saveICP = async (form) => {
     try {
-      const payload={...form,min_years_experience:form.min_years_experience?parseInt(form.min_years_experience):null};
-      if(form.id){const{id,created_at,user_id,...u}=payload;await dbFetch(`icps?id=eq.${form.id}`,session,{method:"PATCH",body:JSON.stringify(u)});}
+      const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {headers: supabaseHeaders(session)});
+      const userData = await userRes.json();
+      const user_id = userData.id;
+      const payload={...form,user_id,min_years_experience:form.min_years_experience?parseInt(form.min_years_experience):null};
+      if(form.id){const{id,created_at,user_id:_,...u}=payload;await dbFetch(`icps?id=eq.${form.id}`,session,{method:"PATCH",body:JSON.stringify(u)});}
       else{await dbFetch("icps",session,{method:"POST",body:JSON.stringify(payload)});}
       await loadData(session); setModal(null);
     } catch(err){alert("Error saving: "+err.message);}
