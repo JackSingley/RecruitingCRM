@@ -21,7 +21,7 @@ button{transition:opacity 0.15s;}button:hover{opacity:0.85;}
 <script type="text/babel">
 const SUPABASE_URL = "https://ztbbdaciykxgdrnmprgx.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0YmJkYWNpeWt4Z2Rybm1wcmd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0MjQ4MjUsImV4cCI6MjA5ODAwMDgyNX0.Or9nsyU8h43tRlAJQyPLbKqbzpPi0xHYDRlHGdjJHvc";
-const ANTHROPIC_KEY = "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";
+const getAnthropicKey = () => localStorage.getItem("anthropic_api_key") || "";
 
 const { useState, useEffect } = React;
 
@@ -70,7 +70,7 @@ const dbFetch = async (path, token, options = {}) => {
 const parseResumeWithAI = async (text) => {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    headers: { "Content-Type": "application/json", "x-api-key": getAnthropicKey(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
     body: JSON.stringify({
       model: "claude-sonnet-4-6", max_tokens: 1000,
       messages: [{ role: "user", content: `Parse this resume and return ONLY a valid JSON object with no markdown, no backticks, no extra text. Use exactly these fields:
@@ -409,7 +409,7 @@ function App() {
   });
   const sorted = matchICP?[...filtered].sort((a,b)=>{const icp=icps.find(i=>i.id===matchICP);return(scoreCandidate(b,icp)||0)-(scoreCandidate(a,icp)||0);}):filtered;
   const benchGaps = EMR_SYSTEMS.map(emr=>({emr,available:candidates.filter(c=>c.candidate_type==="emr"&&(c.emr_systems||[]).includes(emr)&&c.active_status==="active").length,total:candidates.filter(c=>c.candidate_type==="emr"&&(c.emr_systems||[]).includes(emr)).length}));
-  const navItems=[{id:"candidates",label:"Candidates",icon:"👤"},{id:"icps",label:"ICPs",icon:"🎯"},{id:"bench",label:"Bench Gaps",icon:"📊"}];
+  const navItems=[{id:"candidates",label:"Candidates",icon:"👤"},{id:"icps",label:"ICPs",icon:"🎯"},{id:"bench",label:"Bench Gaps",icon:"📊"},{id:"settings",label:"Settings",icon:"⚙️"}];
 
   if(loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{color:C.textSecondary}}>Loading...</div></div>;
   if(!session) return <LoginScreen/>;
@@ -577,6 +577,60 @@ function App() {
             </div>
           </div>
         )}
+        {view==="settings"&&(
+          <SettingsView/>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SettingsView() {
+  const [key, setKey] = useState(localStorage.getItem("anthropic_api_key")||"");
+  const [saved, setSaved] = useState(false);
+
+  const save = () => {
+    localStorage.setItem("anthropic_api_key", key);
+    setSaved(true);
+    setTimeout(()=>setSaved(false), 2000);
+  };
+
+  const clear = () => {
+    localStorage.removeItem("anthropic_api_key");
+    setKey("");
+    setSaved(false);
+  };
+
+  const hasKey = !!localStorage.getItem("anthropic_api_key");
+
+  return (
+    <div style={{maxWidth:560}}>
+      <div style={{marginBottom:24}}>
+        <h1 style={{fontSize:22,fontWeight:700,marginBottom:4}}>Settings</h1>
+        <p style={{color:C.textSecondary,fontSize:13}}>Configure your API keys and preferences</p>
+      </div>
+
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:24,marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+          <span style={{fontSize:16}}>⚡</span>
+          <h3 style={{fontSize:14,fontWeight:700}}>Anthropic API Key</h3>
+          {hasKey&&<span style={{background:"rgba(34,197,94,0.12)",color:"#22C55E",padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:600}}>Active</span>}
+        </div>
+        <p style={{fontSize:12,color:C.textSecondary,marginBottom:16,lineHeight:1.6}}>Required for AI resume parsing. Your key is stored locally in your browser only — never sent to any server other than Anthropic.</p>
+        <div style={{display:"flex",gap:8}}>
+          <input
+            type="password"
+            value={key}
+            onChange={e=>setKey(e.target.value)}
+            placeholder="sk-ant-api03-..."
+            style={{flex:1,background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}
+          />
+          <button onClick={save} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 16px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
+            {saved?"✓ Saved":"Save"}
+          </button>
+          {hasKey&&<button onClick={clear} style={{background:"rgba(239,68,68,0.1)",color:"#EF4444",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>Clear</button>}
+        </div>
+        <p style={{fontSize:11,color:C.textMuted,marginTop:10}}>Get your key at console.anthropic.com · ~$0.01 per resume parsed</p>
       </div>
     </div>
   );
