@@ -7,6 +7,7 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -22,6 +23,20 @@ button{transition:opacity 0.15s;}button:hover{opacity:0.85;}
 const SUPABASE_URL = "https://ztbbdaciykxgdrnmprgx.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0YmJkYWNpeWt4Z2Rybm1wcmd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0MjQ4MjUsImV4cCI6MjA5ODAwMDgyNX0.Or9nsyU8h43tRlAJQyPLbKqbzpPi0xHYDRlHGdjJHvc";
 const getAnthropicKey = () => localStorage.getItem("anthropic_api_key") || "";
+
+const extractTextFromPDF = async (file) => {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map(item => item.str).join(" ");
+    fullText += pageText + "\n";
+  }
+  return fullText;
+};
 
 const { useState, useEffect } = React;
 
@@ -167,7 +182,13 @@ const CandidateForm = ({ candidate, onSave, onCancel }) => {
     const file = e.target.files[0]; if(!file) return;
     setParsing(true); setParseMsg("");
     try {
-      const text = await file.text();
+      let text;
+      if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+        text = await extractTextFromPDF(file);
+      } else {
+        text = await file.text();
+      }
+      if (!text || text.trim().length < 50) throw new Error("Could not extract text");
       const parsed = await parseResumeWithAI(text);
       setForm(f=>({...f,...parsed,emr_systems:Array.isArray(parsed.emr_systems)?parsed.emr_systems:[],skills:Array.isArray(parsed.skills)?parsed.skills.join(", "):parsed.skills||""}));
       setParseMsg("✓ Resume parsed successfully");
