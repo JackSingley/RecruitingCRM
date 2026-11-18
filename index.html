@@ -130,7 +130,7 @@ const LoginScreen = () => (
 );
 
 const CandidateForm = ({candidate, onSave, onCancel}) => {
-  const [form,setForm] = useState(candidate||{candidate_type:"emr",first_name:"",last_name:"",email:"",phone:"",location:"",linkedin_url:"",current_title:"",current_company:"",years_experience:"",emr_systems:[],skills:"",target_roles:"",comp_min:"",comp_max:"",travel_willing:false,available_date:"",active_status:"active",notes:"",last_contacted:""});
+  const [form,setForm] = useState(candidate||{candidate_type:"emr",first_name:"",last_name:"",email:"",phone:"",location:"",linkedin_url:"",current_title:"",current_company:"",years_experience:"",emr_systems:[],skills:"",target_roles:"",comp_min:"",comp_max:"",travel_willing:false,available_date:"",active_status:"active",notes:"",last_contacted:"",previously_placed:false,rank:""});
   const [parsing,setParsing] = useState(false);
   const [parseMsg,setParseMsg] = useState("");
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
@@ -178,6 +178,13 @@ const CandidateForm = ({candidate, onSave, onCancel}) => {
         <Field label="Current Company" value={form.current_company} onChange={v=>set("current_company",v)}/>
         <Field label="Years Experience" value={form.years_experience} onChange={v=>set("years_experience",v)} type="number"/>
         <Sel label="Status" value={form.active_status} onChange={v=>set("active_status",v)} options={[{value:"active",label:"Active - Looking"},{value:"passive",label:"Passive - Open"},{value:"placed",label:"Placed / Unavailable"},{value:"do_not_contact",label:"Do Not Contact"}]}/>
+        <Sel label="Rank" value={form.rank} onChange={v=>set("rank",v)} options={[{value:"",label:"Unranked"},{value:"A",label:"A - Top tier"},{value:"B",label:"B - Solid"},{value:"C",label:"C - Backup"}]}/>
+        <div style={{marginBottom:16,display:"flex",alignItems:"flex-end",paddingBottom:10}}>
+          <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",fontSize:13}}>
+            <input type="checkbox" checked={form.previously_placed||false} onChange={e=>set("previously_placed",e.target.checked)} style={{width:16,height:16,accentColor:C.accent}}/>
+            <span>Placed before</span>
+          </label>
+        </div>
       </div>
       {form.candidate_type==="emr"&&(
         <div style={{marginBottom:16}}>
@@ -296,7 +303,7 @@ const CandidateDetail = ({candidate, icps, onEdit, onClose, onDelete}) => {
         </div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
-        {[{label:"Email",value:candidate.email},{label:"Phone",value:candidate.phone},{label:"Location",value:candidate.location},{label:"Experience",value:candidate.years_experience?`${candidate.years_experience} years`:null},{label:"Status",value:candidate.active_status?.replace(/_/g," ")},{label:"Available",value:candidate.available_date},{label:"Last Contacted",value:candidate.last_contacted},{label:"Travel",value:candidate.travel_willing?"Yes":"No"},{label:"Pay Range",value:candidate.comp_min||candidate.comp_max?`$${candidate.comp_min||"?"} - $${candidate.comp_max||"?"}`:null}].filter(i=>i.value).map(item=>(
+        {[{label:"Email",value:candidate.email},{label:"Phone",value:candidate.phone},{label:"Location",value:candidate.location},{label:"Experience",value:candidate.years_experience?`${candidate.years_experience} years`:null},{label:"Status",value:candidate.active_status?.replace(/_/g," ")},{label:"Rank",value:candidate.rank},{label:"Placed Before",value:candidate.previously_placed?"Yes":null},{label:"Available",value:candidate.available_date},{label:"Last Contacted",value:candidate.last_contacted},{label:"Travel",value:candidate.travel_willing?"Yes":"No"},{label:"Pay Range",value:candidate.comp_min||candidate.comp_max?`$${candidate.comp_min||"?"} - $${candidate.comp_max||"?"}`:null}].filter(i=>i.value).map(item=>(
           <div key={item.label}>
             <div style={{fontSize:11,color:C.textMuted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:3}}>{item.label}</div>
             <div style={{fontSize:13}}>{item.value}</div>
@@ -358,7 +365,7 @@ const CandidateTable = ({candidates, icps, matchICP, onSelect}) => {
     <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
       <table style={{width:"100%",borderCollapse:"collapse"}}>
         <thead><tr style={{borderBottom:`1px solid ${C.border}`}}>
-          {["Name","Type","Title / Company","EMR / Skills","Status","Available",matchICP?"ICP Score":"Last Contact"].map(h=>(
+          {["Name","Type","Title / Company","EMR / Skills","Status","Rank","Placed","Available",matchICP?"ICP Score":"Last Contact"].map(h=>(
             <th key={h} style={{padding:"12px 16px",textAlign:"left",fontSize:11,fontWeight:600,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.5}}>{h}</th>
           ))}
         </tr></thead>
@@ -372,6 +379,8 @@ const CandidateTable = ({candidates, icps, matchICP, onSelect}) => {
               <td style={{padding:"14px 16px",fontSize:12,color:C.textSecondary,maxWidth:160}}><div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.current_title}</div><div style={{fontSize:11,color:C.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.current_company}</div></td>
               <td style={{padding:"14px 16px"}}><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{c.candidate_type==="emr"?(c.emr_systems||[]).slice(0,3).map(e=><Badge key={e} color="emr" size="sm">{e}</Badge>):(c.skills||"").split(",").slice(0,2).filter(Boolean).map(s=><Badge key={s} color="muted" size="sm">{s.trim()}</Badge>)}</div></td>
               <td style={{padding:"14px 16px"}}><Badge color={c.active_status==="active"?"success":c.active_status==="passive"?"warning":"muted"}>{c.active_status?.replace(/_/g," ")}</Badge></td>
+              <td style={{padding:"14px 16px"}}>{c.rank?<Badge color={c.rank==="A"?"success":c.rank==="B"?"warning":"muted"}>{c.rank}</Badge>:<span style={{fontSize:12,color:C.textMuted}}>--</span>}</td>
+              <td style={{padding:"14px 16px"}}>{c.previously_placed?<Badge color="accent">Placed</Badge>:<span style={{fontSize:12,color:C.textMuted}}>--</span>}</td>
               <td style={{padding:"14px 16px",fontSize:12,color:C.textSecondary}}>{c.available_date||"--"}</td>
               <td style={{padding:"14px 16px"}}>{matchICP?<ScoreBadge score={score}/>:<span style={{fontSize:12,color:C.textSecondary}}>{c.last_contacted||"--"}</span>}</td>
             </tr>
@@ -395,6 +404,7 @@ function App() {
   const [search,setSearch] = useState("");
   const [filterStatus,setFilterStatus] = useState("all");
   const [matchICP,setMatchICP] = useState("");
+  const [filterRank,setFilterRank] = useState("all");
   const [bulkUpload,setBulkUpload] = useState(null);
 
   useEffect(()=>{
@@ -413,7 +423,7 @@ function App() {
   const saveCandidate = async (form) => {
     try {
       const user_id=await getUserId(session);
-      const payload={...form,user_id,years_experience:form.years_experience?parseInt(form.years_experience):null,comp_min:form.comp_min||null,comp_max:form.comp_max||null,available_date:form.available_date||null,last_contacted:form.last_contacted||null};
+      const payload={...form,user_id,years_experience:form.years_experience?parseInt(form.years_experience):null,comp_min:form.comp_min||null,comp_max:form.comp_max||null,available_date:form.available_date||null,last_contacted:form.last_contacted||null,rank:form.rank||null,previously_placed:!!form.previously_placed};
       if(form.id){const{id,created_at,user_id:_,...u}=payload;await dbFetch(`candidates?id=eq.${form.id}`,session,{method:"PATCH",body:JSON.stringify(u)});}
       else{await dbFetch("candidates",session,{method:"POST",body:JSON.stringify(payload)});}
       await loadData(session); setModal(null);
@@ -493,6 +503,9 @@ function App() {
     const q=search.toLowerCase();
     if(q) list=list.filter(c=>`${c.first_name} ${c.last_name} ${c.current_title} ${c.location} ${(c.emr_systems||[]).join(" ")} ${c.skills||""}`.toLowerCase().includes(q));
     if(filterStatus!=="all") list=list.filter(c=>c.active_status===filterStatus);
+    if(filterRank==="placed") list=list.filter(c=>c.previously_placed);
+    else if(filterRank==="unranked") list=list.filter(c=>!c.rank);
+    else if(filterRank!=="all") list=list.filter(c=>c.rank===filterRank);
     if(matchICP){const icp=icps.find(i=>i.id===matchICP);list=[...list].sort((a,b)=>(scoreCandidate(b,icp)||0)-(scoreCandidate(a,icp)||0));}
     return list;
   };
@@ -601,6 +614,9 @@ function App() {
               <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, title, EMR, location..." style={{flex:1,minWidth:200,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}/>
               <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}>
                 <option value="all">All Statuses</option><option value="active">Active</option><option value="passive">Passive</option><option value="placed">Placed</option>
+              </select>
+              <select value={filterRank} onChange={e=>setFilterRank(e.target.value)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}>
+                <option value="all">All Ranks</option><option value="A">Rank A</option><option value="B">Rank B</option><option value="C">Rank C</option><option value="unranked">Unranked</option><option value="placed">Placed before</option>
               </select>
               {icps.length>0&&<select value={matchICP} onChange={e=>setMatchICP(e.target.value)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}><option value="">Sort by ICP match...</option>{icps.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select>}
             </div>
