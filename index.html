@@ -353,7 +353,7 @@ const SettingsView = () => {
   );
 };
 
-const CandidateTable = ({candidates, icps, matchICP, onSelect}) => {
+const CandidateTable = ({candidates, icps, matchICP, onSelect, onQuickUpdate}) => {
   if(candidates.length===0) return (
     <div style={{textAlign:"center",padding:"60px 20px",color:C.textMuted}}>
       <div style={{fontSize:40,marginBottom:16}}>&#128100;</div>
@@ -379,8 +379,14 @@ const CandidateTable = ({candidates, icps, matchICP, onSelect}) => {
               <td style={{padding:"14px 16px",fontSize:12,color:C.textSecondary,maxWidth:160}}><div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.current_title}</div><div style={{fontSize:11,color:C.textMuted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.current_company}</div></td>
               <td style={{padding:"14px 16px"}}><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{c.candidate_type==="emr"?(c.emr_systems||[]).slice(0,3).map(e=><Badge key={e} color="emr" size="sm">{e}</Badge>):(c.skills||"").split(",").slice(0,2).filter(Boolean).map(s=><Badge key={s} color="muted" size="sm">{s.trim()}</Badge>)}</div></td>
               <td style={{padding:"14px 16px"}}><Badge color={c.active_status==="active"?"success":c.active_status==="passive"?"warning":"muted"}>{c.active_status?.replace(/_/g," ")}</Badge></td>
-              <td style={{padding:"14px 16px"}}>{c.rank?<Badge color={c.rank==="A"?"success":c.rank==="B"?"warning":"muted"}>{c.rank}</Badge>:<span style={{fontSize:12,color:C.textMuted}}>--</span>}</td>
-              <td style={{padding:"14px 16px"}}>{c.previously_placed?<Badge color="accent">Placed</Badge>:<span style={{fontSize:12,color:C.textMuted}}>--</span>}</td>
+              <td style={{padding:"14px 16px"}} onClick={e=>e.stopPropagation()}>
+                <select value={c.rank||""} onChange={e=>onQuickUpdate(c.id,{rank:e.target.value||null})} style={{background:c.rank==="A"?"rgba(34,197,94,0.15)":c.rank==="B"?"rgba(245,158,11,0.15)":c.rank==="C"?"rgba(139,144,168,0.15)":C.bg,color:c.rank==="A"?C.success:c.rank==="B"?C.warning:c.rank==="C"?C.textSecondary:C.textMuted,border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 8px",fontSize:12,fontWeight:600,outline:"none",cursor:"pointer"}}>
+                  <option value="">--</option><option value="A">A</option><option value="B">B</option><option value="C">C</option>
+                </select>
+              </td>
+              <td style={{padding:"14px 16px"}} onClick={e=>e.stopPropagation()}>
+                <input type="checkbox" checked={!!c.previously_placed} onChange={e=>onQuickUpdate(c.id,{previously_placed:e.target.checked})} style={{width:16,height:16,accentColor:C.accent,cursor:"pointer"}}/>
+              </td>
               <td style={{padding:"14px 16px",fontSize:12,color:C.textSecondary}}>{c.available_date||"--"}</td>
               <td style={{padding:"14px 16px"}}>{matchICP?<ScoreBadge score={score}/>:<span style={{fontSize:12,color:C.textSecondary}}>{c.last_contacted||"--"}</span>}</td>
             </tr>
@@ -428,6 +434,12 @@ function App() {
       else{await dbFetch("candidates",session,{method:"POST",body:JSON.stringify(payload)});}
       await loadData(session); setModal(null);
     } catch(err){alert("Error saving: "+err.message);}
+  };
+
+  const quickUpdate = async (id, fields) => {
+    setCandidates(list=>list.map(c=>c.id===id?{...c,...fields}:c));
+    try { await dbFetch(`candidates?id=eq.${id}`,session,{method:"PATCH",body:JSON.stringify(fields)}); }
+    catch(err){ alert("Could not save change: "+err.message); await loadData(session); }
   };
 
   const deleteCandidate = async (id) => {
@@ -620,7 +632,7 @@ function App() {
               </select>
               {icps.length>0&&<select value={matchICP} onChange={e=>setMatchICP(e.target.value)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 14px",color:C.textPrimary,fontSize:13,outline:"none"}}><option value="">Sort by ICP match...</option>{icps.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select>}
             </div>
-            <CandidateTable candidates={filtered} icps={icps} matchICP={matchICP} onSelect={c=>{setSelected(c);setModal("detail");}}/>
+            <CandidateTable candidates={filtered} icps={icps} matchICP={matchICP} onQuickUpdate={quickUpdate} onSelect={c=>{setSelected(c);setModal("detail");}}/>
           </div>
         )}
 
